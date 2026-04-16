@@ -1,110 +1,96 @@
+import os
+from dotenv import load_dotenv
+
 from loaders.data_loader import load_data
 from embeddings.embedding import EmbeddingModel
 from vectordb.vector_store import VectorStore
 from retriever.retriever import Retriever
 
-# Load data
+from google import genai
+
+# ---------------------------
+# LOAD ENV FILE
+# ---------------------------
+load_dotenv()
+
+API_KEY = os.getenv("GOOGLE_API_KEY")
+
+if not API_KEY:
+    raise Exception("API key not found. Check .env file")
+
+# ---------------------------
+# GEMINI CLIENT (NEW SDK)
+# ---------------------------
+client = genai.Client(api_key=API_KEY)
+
+# ---------------------------
+# LOAD DATA
+# ---------------------------
 documents = load_data()
 
-# Embeddings
+# ---------------------------
+# EMBEDDINGS
+# ---------------------------
 embed_model = EmbeddingModel()
 texts = [doc.page_content for doc in documents]
 embeddings = embed_model.get_embeddings(texts)
 
-# Vector DB
+# ---------------------------
+# VECTOR STORE
+# ---------------------------
 vector_db = VectorStore()
 vector_db.add_documents(documents, embeddings)
 
-# Retriever
+# ---------------------------
+# RETRIEVER
+# ---------------------------
 retriever = Retriever(vector_db.collection, embed_model)
 
-
-# 🔥 FINAL ANSWER FUNCTION
+# ---------------------------
+# FINAL ANSWER FUNCTION
+# ---------------------------
 def final_answer(query):
 
     results = retriever.query(query)
 
-    students = []
+    if not results["documents"] or not results["documents"][0]:
+        return "No data found"
 
-    # Convert text → dict
-    for doc in results["documents"][0]:
-        data = {}
-        for line in doc.split("\n"):
-            if ": " in line:
-                key, value = line.split(": ", 1)
-                data[key.strip()] = value.strip()
+    context = "\n".join(results["documents"][0])
 
-        if "id" in data:
-            students.append(data)
+    prompt = f"""
+You are a helpful AI assistant.
 
-    query_lower = query.lower()
+Context:
+{context}
 
-    # ✅ HOW MANY COURSES
-    if "how many course" in query_lower or "how many courses" in query_lower:
-        courses = set()
-        for doc in documents:
-            for line in doc.page_content.split("\n"):
-                if "course" in line:
-                    courses.add(line.split(": ")[1])
-        return f"Total courses: {len(courses)}"
+Question:
+{query}
 
-    # ✅ HOW MANY STUDENTS
-    elif "how many" in query_lower:
-        return f"Total students: {len(documents)}"
+Rules:
+- Use only given data
+- Do calculations if needed (average, count, max, min)
+- Give short answer
+"""
 
-    # ✅ FILTER COURSE
-    if "cs" in query_lower:
-        students = [s for s in students if s.get("course", "").lower() == "cs"]
+    try:
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=prompt
+        )
+        return response.text
 
-    if "it" in query_lower:
-        students = [s for s in students if s.get("course", "").lower() == "it"]
+    except Exception as e:
+        return f"Error: {e}"
 
-    # ✅ FILTER MARKS ABOVE
-    if "above" in query_lower:
-        try:
-            value = int(query_lower.split("above ")[1].split()[0])
-            students = [s for s in students if int(s.get("marks", 0)) > value]
-        except:
-            pass
-
-    # ✅ FILTER MARKS BELOW
-    if "below" in query_lower:
-        try:
-            value = int(query_lower.split("below ")[1].split()[0])
-            students = [s for s in students if int(s.get("marks", 0)) < value]
-        except:
-            pass
-
-    # ✅ SORT (highest marks first)
-    students = sorted(students, key=lambda x: int(x.get("marks", 0)), reverse=True)
-
-    # ✅ TOP STUDENT
-    if "top student" in query_lower or "best student" in query_lower:
-        if students:
-            s = students[0]
-            return f"Top Student: {s['name']} ({s['course']}) - {s['marks']} marks"
-        else:
-            return "No student found"
-
-    # ✅ OUTPUT
-    if not students:
-        return "No students found"
-
-    answer = "\nTop Students:\n"
-    for s in students[:5]:
-        answer += f"{s['name']} ({s['course']}) - {s['marks']} marks\n"
-
-    return answer
-
-
-# 🔥 CONSOLE LOOP
+# ---------------------------
+# CHAT LOOP
+# ---------------------------
 while True:
     query = input("\nAsk question (type exit): ")
 
     if query.lower() == "exit":
-        print("\nThank you for using Student Query System 😊")
         print("Goodbye 👋")
         break
 
-    print("\nAnswer:\n")
-    print(final_answer(query))
+    print("\nAnswer:\n", final_answer(query))
